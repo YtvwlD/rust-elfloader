@@ -15,7 +15,7 @@ use log::*;
 
 use xmas_elf::dynamic::*;
 use xmas_elf::header;
-use xmas_elf::program::ProgramHeader::Ph64;
+use xmas_elf::program::ProgramHeader::{Ph32, Ph64};
 use xmas_elf::program::{ProgramIter, SegmentData, Type};
 use xmas_elf::sections::SectionData;
 use xmas_elf::*;
@@ -307,8 +307,10 @@ impl<'s> ElfBinary<'s> {
         let header = self.file.header;
         let typ = header.pt2.type_().as_type();
 
-        if header.pt1.class() != header::Class::SixtyFour {
-            Err("Not 64bit ELF")
+        if !(header.pt1.class() == header::Class::ThirtyTwo
+            || header.pt1.class() == header::Class::SixtyFour)
+        {
+            Err("Not 32bit or 64bit ELF")
         } else if header.pt1.version() != header::Version::Current {
             Err("Invalid version")
         } else if header.pt1.data() != header::Data::LittleEndian {
@@ -320,8 +322,10 @@ impl<'s> ElfBinary<'s> {
         } else if !(typ == header::Type::Executable || typ == header::Type::SharedObject) {
             error!("Invalid ELF type {:?}", typ);
             Err("Invalid ELF type")
-        } else if header.pt2.machine().as_machine() != header::Machine::X86_64 {
-            Err("ELF file is not for x86-64 machine")
+        } else if !(header.pt2.machine().as_machine() == header::Machine::X86
+            || header.pt2.machine().as_machine() == header::Machine::X86_64)
+        {
+            Err("ELF file is not for x86 or x86-64 machine")
         } else {
             Ok(())
         }
@@ -413,13 +417,19 @@ impl<'s> ElfBinary<'s> {
 
         // Trying to determine loadeable headers
         fn select_load(&pheader: &ProgramHeader) -> bool {
-            if let Ph64(header) = pheader {
-                header
+            match pheader {
+                Ph64(header) => {
+                    header
                     .get_type()
                     .map(|typ| typ == Type::Load)
                     .unwrap_or(false)
-            } else {
-                false
+                },
+                Ph32(header) => {
+                    header
+                    .get_type()
+                    .map(|typ| typ == Type::Load)
+                    .unwrap_or(false)
+                },
             }
         }
 
@@ -435,21 +445,33 @@ impl<'s> ElfBinary<'s> {
 
         // Load all headers
         for p in self.file.program_iter() {
-            if let Ph64(header) = p {
-                let typ = header.get_type()?;
-                if typ == Type::Load {
-                    loader.load(
-                        header.flags,
-                        header.virtual_addr,
-                        header.raw_data(&self.file),
-                    )?;
-                } else if typ == Type::Tls {
-                    loader.tls(
-                        header.virtual_addr,
-                        header.file_size,
-                        header.mem_size,
-                        header.align,
-                    )?;
+            match p {
+                Ph64(header) => {
+                    let typ = header.get_type()?;
+                    if typ == Type::Load {
+                        loader.load(
+                            header.flags,
+                            header.virtual_addr,
+                            header.raw_data(&self.file),
+                        )?;
+                    } else if typ == Type::Tls {
+                        loader.tls(
+                            header.virtual_addr,
+                            header.file_size,
+                            header.mem_size,
+                            header.align,
+                        )?;
+                    }
+                },
+                Ph32(header) => {
+                    let typ = header.get_type()?;
+                    if typ == Type::Load {
+                        loader.load(
+                            header.flags,
+                            header.virtual_addr.into(),
+                            header.raw_data(&self.file),
+                        )?;
+                    }
                 }
             }
         }
